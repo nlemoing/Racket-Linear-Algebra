@@ -160,6 +160,11 @@
         [(symbol=? (first op) 'mult) (ERO-mult (second op) (third op) A)]
         [(symbol=? (first op) 'swap) (ERO-swap (second op) (third op) A)]))
 
+;last column with leading one
+;if no leading one in top left and non-zero column, put leading one in top left
+;otherwise move to next column
+;do EROs to clear the column with new leading one
+;move to next row, column
 (define (row-reduce A)
   (local [(define (leading-one-top-left A row)
             (local [(define fnz (cond [(or (empty? A)
@@ -236,5 +241,65 @@
                                                    (determinant (replace-ith-col index (transpose A) b)))))))]
     (solve-cramer A b)))
 
+;we are taking inverse by cofactors
+;requires n^2 determinants (although they are (n-1) * (n-1)
+;cramer's rule requires n determinants of size n * n
+;recall that determinants are recursive and take longer
+
 (define (characteristic A)
   (lambda (x) (determinant (matrix-add A (matrix-scmult (* -1 x) (identity (length A)))))))
+
+
+
+; finds the characteristic polynomial of A - returns a 1 argument function
+
+;;Q1
+
+(define I3 (identity 3))
+
+(define op-lst `((swap 0 1)
+                 (add 1 -2 0)
+                 (add 2 2 0)
+                 (add 0 -1 1)
+                 (add 2 -2 1)
+                 (mult ,(/ -1 6) 2)
+                 (add 0 4 2)
+                 (add 1 -3 2)))
+
+(define row-ops (map (lambda (x) (elem-matrix x 3)) op-lst))
+
+(define A-1 (foldl (lambda (x y) (matrix-mult x y))
+                   I3
+                   row-ops))
+
+(define A (foldr (lambda (x y) (matrix-mult (inverse x) y))
+                 I3
+                 row-ops))
+(define row-A (apply-EROs A op-lst))
+
+(define b '(-1 1 0))
+(define L '((0 0) (-2 -3)))
+(define CL (characteristic L))
+(define eigen1 '(2 -1))
+(define eigen2 '(-1 1))
+(define P (transpose (list eigen1 eigen2)))
+(define P-1 (inverse P))
+
+(define v1 '(1 0 -2))
+(define v2 '(-1 1 1))
+(define p1 (proj v1 v2))
+(define p2 (perp v1 v2))
+(define n (cross v1 v2))
+(define c '(1 1 1))
+
+(define B '((1 1 2 2)
+            (2 2 4 4)
+            (0 1 2 0)))
+
+(define (clear-rows col leading1-index curr-index)
+            (cond [(empty? col) empty]
+                  [(or (= curr-index leading1-index)
+                       (= (first col) 0))
+                   (clear-rows (rest col) leading1-index (add1 curr-index))]
+                  [else (cons (cons 'add (cons curr-index (cons (* -1 (first col)) (cons leading1-index empty))))
+                              (clear-rows (rest col) leading1-index (add1 curr-index)))]))
