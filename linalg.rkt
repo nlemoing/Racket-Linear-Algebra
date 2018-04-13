@@ -22,9 +22,17 @@
          apply-EROs
          elem-matrix
          identity
-         solve
+         solve-cramer
          characteristic
-         row-reduce)
+         rank
+         REF
+         RREF
+         REFops
+         RREFops)
+
+(define (square-matrix? A)
+  (or (empty? A)
+      (= (length A) (length (first A)))))
 
 (define (determinant A)
   (local [(define (cofactor-expansion A row col)
@@ -38,7 +46,8 @@
                (* (first (second A)) (second (first A)))))
           (define (1d-det A)
             (first (first A)))]
-    (cond [(= (length A) 1) (1d-det A)]
+    (cond [(not (square-matrix? A)) (error "Cannot take determinant of non-square matrix")]
+          [(= (length A) 1) (1d-det A)]
           [(= (length A) 2) (2d-det A)]
           [else (cofactor-expansion A (first A) 0)])))
 
@@ -108,15 +117,17 @@
 
 ;computes inverse by cofactors - will break if A is not n by n
 (define (inverse A)
-  (local [(define det (determinant A))
-          (define (cofactor-matrix A)
-            (build-list (length A)
-                        (lambda (row)
-                          (build-list (length A)
-                                      (lambda (col)
-                                        (cofactor A row col))))))]
-    (cond [(= det 0) false]
-          [else (matrix-scmult (/ 1 det) (transpose (cofactor-matrix A)))])))
+  (cond [(not (square-matrix? A)) (error "Matrix must be square to compute inverse")]
+        [else
+         (local [(define det (determinant A))
+                 (define (cofactor-matrix A)
+                   (build-list (length A)
+                               (lambda (row)
+                                 (build-list (length A)
+                                             (lambda (col)
+                                               (cofactor A row col))))))]
+           (cond [(= det 0) false]
+                 [else (matrix-scmult (/ 1 det) (transpose (cofactor-matrix A)))]))]))
 
 (define (proj u v)
   (vec-scmult (/ (dot u v)
@@ -160,54 +171,94 @@
         [(symbol=? (first op) 'mult) (ERO-mult (second op) (third op) A)]
         [(symbol=? (first op) 'swap) (ERO-swap (second op) (third op) A)]))
 
-(define (row-reduce A)
-  (local [(define (leading-one-top-left A row)
-            (local [(define fnz (cond [(or (empty? A)
-                                           (empty? (first A)))-1]
-                                      [else (first-non-zero (map first A) 0)]))]
-              (cond [(empty? A) empty]
-                    [(empty? (first A)) empty]
-                    [(= fnz -1)
-                     (leading-one-top-left (map rest A) row)]
-                    [(= (first (first A)) 0)
-                     (cons (cons 'swap (cons row (cons (+ row fnz) empty)))
-                           (leading-one-top-left (ERO-swap 0 fnz A) row))] ;find a non-zero row and swap
-                    [(not (= (first (first A)) 1))
-                     (cons (cons 'mult (cons (/ 1 (first (first A))) (cons row empty)))
-                           (leading-one-top-left (ERO-mult (/ 1 (first (first A))) 0 A) row))] ;mult first row to get a 1
-                    [else (local [(define clear (clear-rows (map first A) row row))
-                                  (define apply (clear-rows (map first A) 0 0))]
-                            (append clear
-                                    (leading-one-top-left (map rest (rest (apply-EROs A apply))) (add1 row))))])))
-          (define (clear-rows col leading1-index curr-index)
-            (cond [(empty? col) empty]
-                  [(or (= curr-index leading1-index)
-                       (= (first col) 0))
-                   (clear-rows (rest col) leading1-index (add1 curr-index))]
-                  [else (cons (cons 'add (cons curr-index (cons (* -1 (first col)) (cons leading1-index empty))))
-                              (clear-rows (rest col) leading1-index (add1 curr-index)))]))
+(define (REF A)
+  (row-reduce A 'REF))
+
+(define (REFops A)
+  (row-reduce A 'REFops))
+
+(define (RREF A)
+  (row-reduce A 'RREF))
+
+(define (RREFops A)
+  (row-reduce A 'RREFops))
+
+(define (rank A)
+  (foldr (lambda (first rest)
+           (cond [(andmap (lambda (x) (= x 0)) first) rest]
+                 [else (add1 rest)])) 0 (REF A)))
+
+(define (row-reduce A op)
+  (local [(define (row-echelon A RREF? ops?)
+            (local [(define (reduce A REF EROs row RREF? ops?)
+                      (cond [(or (empty? A)
+                                 (empty? (first A)))
+                             (cond [(and (not RREF?) (not ops?)) REF]
+                                   [(not RREF?) (reverse EROs)]
+                                   [else (reduced-row-echelon REF EROs ops?)])]
+                            [(andmap (lambda (x) (= x 0))
+                                     (map first A)) ; first column has all zeroes
+                             (reduce (map rest A) REF EROs row RREF? ops?)]
+                            [(= (first (first A)) 0)
+                             (local [(define fnz (first-non-zero (map first A)))]
+                               (reduce (ERO-swap 0 fnz A)
+                                       (ERO-swap row (+ row fnz) REF)
+                                       (cons (cons 'swap (cons row (cons (+ row fnz) empty)))
+                                             EROs)
+                                       row RREF? ops?))]
+                            [(not (= (first (first A)) 1))
+                             (reduce (ERO-mult (/ 1 (first (first A))) 0 A)
+                                     (ERO-mult (/ 1 (first (first A))) row REF)
+                                     (cons (cons 'mult (cons (/ 1 (first (first A))) (cons row empty)))
+                                           EROs)
+                                     row RREF? ops?)]
+                            [(ormap (lambda (x) (not (= x 0)))
+                                    (rest (map first A))) ; nonzero elements in the column
+                             (local [(define fnz (+ 1 (first-non-zero (rest (map first A)))))
+                                     (define fnzval (* -1 (foldr (lambda (first result)
+                                                                   (cond [(not (= first 0)) first]
+                                                                         [else result]))
+                                                                 -1
+                                                                 (rest (map first A)))))]
+                               (reduce (ERO-add fnz fnzval 0 A)
+                                       (ERO-add (+ fnz row) fnzval row REF)
+                                       (cons (cons 'add (cons (+ fnz row) (cons fnzval (cons row empty))))
+                                             EROs)
+                                       row RREF? ops?))]
+                            [else (reduce (rest (map rest A)) REF EROs (add1 row) RREF? ops?)]))]
+              (reduce A A empty 0 RREF? ops?)))
           
+          (define (reduced-row-echelon REF EROs ops?)
+            (local [(define leading-ones-columns (filter (lambda (x) (not (= x -1)))
+                                                         (map first-non-zero REF)))
+                    (define (reduce REF EROs ops? ones-lst row)
+                      (cond [(empty? ones-lst)
+                             (cond [(false? ops?) REF]
+                                   [else (reverse EROs)])]
+                            [(= (length (filter (lambda (x) (not (= x 0))) (get-col REF (first ones-lst)))) 1)
+                             (reduce REF EROs ops? (rest ones-lst) (add1 row))]
+                            [else (local [(define col (get-col REF (first ones-lst)))
+                                          (define fnz (first-non-zero col))
+                                          (define fnzval (* -1 (foldr (lambda (first result)
+                                                                        (cond [(not (= first 0)) first]
+                                                                              [else result]))
+                                                                      -1 col)))]
+                                    (reduce (ERO-add fnz fnzval row REF)
+                                            (cons (list 'add fnz fnzval row) EROs)
+                                            ops? ones-lst row))]))]
+              (reduce REF EROs ops? leading-ones-columns 0)))
           
-          (define (first-non-zero row index)
-            (cond [(empty? row) -1]
-                  [(not (= (first row) 0)) index]
-                  [else (first-non-zero (rest row) (add1 index))]))
-         
-          (define (clear-above A)
-            (local [(define (clear-above-acc A row leading-ones)
-                      (cond [(empty? leading-ones) empty]
-                            [else (local [(define operations (clear-rows (get-col A (first leading-ones)) row 0))]
-                                    (append operations
-                                          (clear-above-acc (apply-EROs A operations) (add1 row) (rest leading-ones))))]))
-                    (define (leading-one-index A)
-                      (filter (lambda (x) (not (= x -1))) (map (lambda (x) (first-non-zero x 0)) A)))]
-              (clear-above-acc A 0 (leading-one-index A))))
-          (define row-echelon-steps (leading-one-top-left A 0))
-          (define row-echelon (apply-EROs A row-echelon-steps))
-          (define reduced-row-echelon-steps (clear-above row-echelon))
-          (define reduced-row-echelon (apply-EROs row-echelon reduced-row-echelon-steps))]
-    reduced-row-echelon
-            ))
+          (define (first-non-zero lst)
+            (local [(define (first-non-zero-index lst index)
+                      (cond [(empty? lst) -1]
+                            [(not (= (first lst) 0)) index]
+                            [else (first-non-zero-index (rest lst) (add1 index))]))]
+              (first-non-zero-index lst 0)))]
+    (cond [(symbol=? op 'REF) (row-echelon A false false)]
+          [(symbol=? op 'REFops) (row-echelon A false true)]
+          [(symbol=? op 'RREF) (row-echelon A true false)]
+          [(symbol=? op 'RREFops) (row-echelon A true true)]
+          [else (error "row-reduce: invalid command")])))
 
 (define (apply-EROs A ops)
   (cond [(empty? ops) A]
@@ -222,19 +273,17 @@
                                       (cond [(= x y) 1]
                                             [else 0]))))))
 
-(define (solve A b)
-  (local [(define (solve-inverse A b)
-            (vec-matrix-mult (inverse A) b))
-          (define (solve-cramer A b)
-            (local [(define detA (determinant A))
-                    (define (replace-ith-col index A col)
-                      (cond [(empty? A) empty]
-                            [(= index 0) (cons col (rest A))]
-                            [else (cons (first A) (replace-ith-col (sub1 index) (rest A) col))]))]
-              (vec-scmult (/ 1 detA) (build-list (length A)
-                                                 (lambda (index)
-                                                   (determinant (replace-ith-col index (transpose A) b)))))))]
-    (solve-cramer A b)))
+(define (solve-cramer A b)
+  (local [(define detA (determinant A))
+          (define (replace-ith-col index A col)
+            (cond [(empty? A) empty]
+                  [(= index 0) (cons col (rest A))]
+                  [else (cons (first A) (replace-ith-col (sub1 index) (rest A) col))]))]
+    (cond [(= detA 0) (error "Matrix not invertible, cannot use cramer's rule")]
+          [else 
+           (vec-scmult (/ 1 detA) (build-list (length A)
+                                              (lambda (index)
+                                                (determinant (replace-ith-col index (transpose A) b)))))])))
 
 (define (characteristic A)
   (lambda (x) (determinant (matrix-add A (matrix-scmult (* -1 x) (identity (length A)))))))
