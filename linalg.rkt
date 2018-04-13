@@ -45,11 +45,22 @@
             (- (* (first (first A)) (second (second A)))
                (* (first (second A)) (second (first A)))))
           (define (1d-det A)
-            (first (first A)))]
+            (first (first A)))
+          (define row-ops (RREFops A))
+          (define RREF (apply-EROs A row-ops))
+          (define det-RREF (cond [(ormap (lambda (x) (andmap (lambda (y) (= y 0)) x)) RREF) 0]
+                                 [else 1]))]
     (cond [(not (square-matrix? A)) (error "Cannot take determinant of non-square matrix")]
           [(= (length A) 1) (1d-det A)]
           [(= (length A) 2) (2d-det A)]
-          [else (cofactor-expansion A (first A) 0)])))
+          [(= det-RREF 0) 0]
+          [else (foldr (lambda (x y)
+                         (match x
+                           [(cons 'add rest) y]
+                           [(cons 'mult (cons c rest)) (* (/ 1 c) y)]
+                           [(cons 'swap rest) (* -1 y)]))
+                       1
+                       row-ops)])))
 
 (define (cofactor A r c)
   (local [(define (remove-ith-element i lst)
@@ -59,7 +70,7 @@
                               (remove-ith-element (sub1 i) (rest lst)))]))
           (define Aij (remove-ith-element r (map (lambda (x) (remove-ith-element c x)) A)))]
     (* (expt -1 (+ r c))
-       (determinant Aij))))           
+       (determinant Aij))))       
 
 (define (vec-add x y)
   (foldr (lambda (a b result)
@@ -116,7 +127,7 @@
   (get-ith-elem col (get-ith-elem row A)))
 
 ;computes inverse by cofactors - will break if A is not n by n
-(define (inverse A)
+(define (inverse-by-cofactors A)
   (cond [(not (square-matrix? A)) (error "Matrix must be square to compute inverse")]
         [else
          (local [(define det (determinant A))
@@ -128,6 +139,13 @@
                                                (cofactor A row col))))))]
            (cond [(= det 0) false]
                  [else (matrix-scmult (/ 1 det) (transpose (cofactor-matrix A)))]))]))
+
+(define (inverse A)
+  (local [(define row-ops (RREFops A))]
+    (cond [(or (not (square-matrix? A))
+               (not (= (rank A) (length A))))
+           (error "Matrix is not invertible")]
+          [else (apply-EROs (identity (length A)) row-ops)])))
 
 (define (proj u v)
   (vec-scmult (/ (dot u v)
@@ -167,9 +185,10 @@
     (replace-ith-row index1 row A)))
 
 (define (apply-ERO A op)
-  (cond [(symbol=? (first op) 'add) (ERO-add (second op) (third op) (fourth op) A)]
-        [(symbol=? (first op) 'mult) (ERO-mult (second op) (third op) A)]
-        [(symbol=? (first op) 'swap) (ERO-swap (second op) (third op) A)]))
+  (match (first op)
+    ['add (ERO-add (second op) (third op) (fourth op) A)]
+    ['mult (ERO-mult (second op) (third op) A)]
+    ['swap (ERO-swap (second op) (third op) A)]))
 
 (define (REF A)
   (row-reduce A 'REF))
@@ -254,11 +273,12 @@
                             [(not (= (first lst) 0)) index]
                             [else (first-non-zero-index (rest lst) (add1 index))]))]
               (first-non-zero-index lst 0)))]
-    (cond [(symbol=? op 'REF) (row-echelon A false false)]
-          [(symbol=? op 'REFops) (row-echelon A false true)]
-          [(symbol=? op 'RREF) (row-echelon A true false)]
-          [(symbol=? op 'RREFops) (row-echelon A true true)]
-          [else (error "row-reduce: invalid command")])))
+    (match op
+      ['REF (row-echelon A false false)]
+      ['REFops (row-echelon A false true)]
+      ['RREF (row-echelon A true false)]
+      ['RREFops (row-echelon A true true)]
+      [_ (error "row-reduce: invalid command")])))
 
 (define (apply-EROs A ops)
   (cond [(empty? ops) A]
